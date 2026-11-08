@@ -1,0 +1,33 @@
+# Local secrets and runtime data
+.env
+.env.*
+!.env.example
+data/
+logs/
+.run/
+.run-*/
+tests/.tmp/
+_acl_recovery/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# OS
+Thumbs.db
+.DS_Store
+
+#plus
+.venv/
+venv/
+node_modules/
+.vscode/
+.idea/
+*.log
+*.pem
+*.key
+*.p12
+acceptance.md
+tests/

@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>MiniAgent</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark">M</div>
+        <div class="brand-copy">
+          <div class="brand-name">MiniAgent</div>
+          <div class="brand-sub">from scratch</div>
+        </div>
+        <button class="icon-btn" id="theme-toggle" title="切换主题" aria-label="切换主题">◐</button>
+      </div>
+
+      <button class="new-session" id="new-session">
+        <span class="plus">＋</span>
+        <span>新会话</span>
+      </button>
+
+      <div class="session-search">
+        <input id="session-filter" type="search" placeholder="搜索会话…" autocomplete="off">
+      </div>
+
+      <div class="session-list" id="session-list" aria-label="会话列表"></div>
+
+      <div class="sidebar-footer">
+        <button class="footer-btn" id="open-settings">
+          <span class="status-dot" id="llm-dot"></span>
+          <span>设置</span>
+          <span class="footer-spacer"></span>
+          <span class="kbd">⌘,</span>
+        </button>
+        <div class="status-line" id="status-line">未配置模型</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn mobile-only" id="toggle-sidebar" aria-label="会话列表">☰</button>
+        <div class="session-heading">
+          <h1 id="session-title">新会话</h1>
+          <div class="chips" id="session-chips"></div>
+        </div>
+        <div class="topbar-actions">
+          <button class="chip toggle" id="thinking-toggle" title="切换思考模式">思考</button>
+          <button class="chip toggle" id="online-toggle" title="切换联网模式">联网</button>
+          <button class="icon-btn" id="toggle-drawer" title="右侧面板" aria-label="右侧面板">▤</button>
+        </div>
+      </header>
+
+      <section class="chat" id="chat">
+        <div class="messages" id="messages"></div>
+
+        <div class="empty-state" id="empty-state">
+          <div class="empty-mark">M</div>
+          <h2>从一个问题开始</h2>
+          <p>原生 function call · 真实联网 · 事务式上下文</p>
+          <div class="suggestions" id="suggestions">
+            <button class="suggestion" data-prompt="计算 (18*7+4)/2，并求 x^2+sin(x) 在 x=3 处的导数">计算与高数</button>
+            <button class="suggestion" data-prompt="北京今天天气怎么样？然后帮我记一条待办：明天带伞">查天气 + 待办</button>
+            <button class="suggestion" data-prompt="搜索一下 DeepSeek 最新的 API 更新">联网搜索</button>
+            <button class="suggestion" data-prompt="帮我写一段本周周报，并记待办：周五前发周报">写周报 + 待办</button>
+          </div>
+        </div>
+
+        <div class="composer-wrap">
+          <div class="composer" id="composer-box">
+            <textarea id="composer" rows="1" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）" autocomplete="off"></textarea>
+            <div class="composer-actions">
+              <div class="composer-hint" id="composer-hint">Enter 发送 · Shift+Enter 换行</div>
+              <button class="send-btn" id="send-btn" aria-label="发送">发送</button>
+            </div>
+          </div>
+          <div class="composer-meta" id="composer-meta"></div>
+        </div>
+      </section>
+    </main>
+
+    <aside class="drawer" id="drawer">
+      <div class="drawer-tabs" role="tablist">
+        <button class="drawer-tab active" data-tab="todos">待办</button>
+        <button class="drawer-tab" data-tab="profile">画像</button>
+        <button class="drawer-tab" data-tab="context">上下文</button>
+      </div>
+      <div class="drawer-body">
+        <div class="tab-panel active" data-panel="todos">
+          <div class="panel-heading">
+            <span>当前会话</span>
+            <span class="muted" id="todo-count">0</span>
+          </div>
+          <div id="todos-list" class="todo-list"></div>
+          <div class="panel-hint">直接对 Agent 说“完成第 2 条待办”即可修改。</div>
+        </div>
+        <div class="tab-panel" data-panel="profile">
+          <div class="panel-heading">
+            <span>用户画像</span>
+            <span class="muted" id="profile-updated">—</span>
+          </div>
+          <div id="profile-summary" class="profile-box">尚未生成。完成 5 轮对话后自动刷新。</div>
+          <div class="row-actions">
+            <button class="small-btn" id="profile-refresh">刷新</button>
+            <button class="small-btn" id="profile-edit">编辑</button>
+            <button class="small-btn danger" id="profile-clear">清空</button>
+          </div>
+          <div id="profile-editor" class="hidden">
+            <textarea id="profile-input" rows="6" placeholder="手动编辑用户画像…"></textarea>
+            <div class="row-actions">
+              <button class="small-btn primary" id="profile-save">保存</button>
+              <button class="small-btn" id="profile-cancel">取消</button>
+            </div>
+          </div>
+          <div class="panel-hint">画像跨会话共享；会话消息和待办仍然隔离。</div>
+        </div>
+        <div class="tab-panel" data-panel="context">
+          <div class="panel-heading"><span>运行时</span><span class="muted" id="context-online">—</span></div>
+          <div class="kv"><span>模型</span><b id="context-model">—</b></div>
+          <div class="kv"><span>思考模式</span><b id="context-thinking">—</b></div>
+          <div class="kv"><span>最近提交轮次</span><b id="context-turns">0</b></div>
+          <div class="kv"><span>历史摘要</span><b id="context-summary-state">—</b></div>
+          <div class="context-summary" id="context-summary"></div>
+          <div class="panel-heading"><span>工具</span><span class="muted" id="context-tools-count">0</span></div>
+          <div id="context-tools" class="tool-list"></div>
+          <div class="panel-hint">当前对话提交前，整轮内容只存在于内存 draft，不写入会话上下文。</div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="modal-backdrop hidden" id="settings-modal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="modal-header">
+        <div>
+          <h2 id="settings-title">设置</h2>
+          <p class="modal-sub">仅本次进程有效；重启后恢复默认。会话与画像会落盘。</p>
+        </div>
+        <button class="icon-btn" id="settings-close" aria-label="关闭">×</button>
+      </div>
+
+      <div class="settings-body">
+        <section class="settings-section">
+          <h3>DeepSeek 模型</h3>
+          <label class="field">
+            <span>Base URL</span>
+            <input id="setting-base-url" type="url" autocomplete="off">
+          </label>
+          <label class="field">
+            <span>API Key <em id="key-status" class="muted"></em></span>
+            <input id="setting-api-key" type="password" autocomplete="new-password" placeholder="粘贴 DeepSeek API Key">
+          </label>
+          <label class="check-line"><input id="setting-clear-key" type="checkbox"> 清除已保存的 Key</label>
+          <label class="field">
+            <span>模型</span>
+            <input id="setting-model" list="model-options" autocomplete="off">
+            <datalist id="model-options">
+              <option value="deepseek-flash"></option>
+              <option value="deepseek-v4-pro"></option>
+            </datalist>
+          </label>
+          <div class="two-col">
+            <label class="switch-line"><input id="setting-thinking" type="checkbox"> <span>思考模式</span></label>
+            <label class="switch-line"><input id="setting-online" type="checkbox"> <span>联网模式</span></label>
+          </div>
+          <div class="online-status" id="settings-online-status">联网：未开启</div>
+        </section>
+
+        <section class="settings-section">
+          <h3>Agent</h3>
+          <div class="two-col">
+            <label class="field">
+              <span>最大步骤数</span>
+              <input id="setting-max-steps" type="number" min="1" max="20" step="1">
+            </label>
+            <label class="switch-line inline"><input id="setting-profile-auto" type="checkbox"> <span>自动更新画像</span></label>
+          </div>
+          <div class="panel-hint">每 5 个已提交 turn 更新一次；历史超过 8 个 turn 时自动合并摘要。</div>
+        </section>
+
+        <section class="settings-section">
+          <h3>连接测试</h3>
+          <div class="row-actions">
+            <button class="small-btn" id="test-llm">测试模型</button>
+            <button class="small-btn" id="test-online">测试联网 MCP</button>
+            <span class="muted" id="test-result"></span>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <h3>联网工具</h3>
+          <p class="muted">DeepSeek Search / Fetch + Open-Meteo，通过本地 MCP server 提供；无需额外搜索 Key。</p>
+          <div class="mcp-status" id="mcp-status">MCP：未启动</div>
+        </section>
+
+        <section class="settings-section danger-zone">
+          <h3>用户数据 / 危险操作</h3>
+          <p class="muted">
+            一键清除本机所有会话、对话记录、待办、用户画像、trace 日志、进程内设置/API Key，
+            并移除本地 .env 中的 AGENT_API_KEY。此操作不可撤销。
+          </p>
+          <button class="small-btn danger" id="logout-button">一键注销用户</button>
+          <div class="panel-hint" id="logout-note">注销后如需继续使用，请重新配置模型和 API Key。</div>
+        </section>
+      </div>
+
+      <div class="modal-footer">
+        <div class="muted" id="settings-save-note">Key 不会写入磁盘，也不会进入日志。</div>
+        <div class="row-actions">
+          <button class="small-btn" id="settings-cancel">取消</button>
+          <button class="small-btn primary" id="settings-save">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toast-container" aria-live="polite"></div>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
