@@ -218,6 +218,38 @@
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="external-link-modal">
+    <div class="modal external-modal" role="dialog" aria-modal="true" aria-labelledby="external-title">
+      <div class="modal-header">
+        <div>
+          <h2 id="external-title">即将离开 MiniAgent</h2>
+          <p class="modal-sub">第三方链接安全提醒</p>
+        </div>
+        <button class="icon-btn" id="external-close" aria-label="关闭">×</button>
+      </div>
+      <div class="settings-body">
+        <div class="external-warning">
+          <div class="external-icon">↗</div>
+          <div>
+            <p>即将跳转到第三方网站。MiniAgent 不保证该网站的安全性、隐私政策或内容。</p>
+            <p class="muted">请确认链接来源可信后再继续。</p>
+          </div>
+        </div>
+        <div class="external-field-label">目标地址</div>
+        <div class="external-url" id="external-url"></div>
+        <div class="external-host" id="external-host"></div>
+        <div class="external-https" id="external-https"></div>
+      </div>
+      <div class="modal-footer">
+        <div class="muted">默认停留在当前页面</div>
+        <div class="row-actions">
+          <button class="small-btn" id="external-cancel">取消</button>
+          <button class="small-btn primary" id="external-confirm">继续访问</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="toast-container" id="toast-container" aria-live="polite"></div>
   <script type="module" src="/js/app.js"></script>
 </body>

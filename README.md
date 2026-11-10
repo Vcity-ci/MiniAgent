@@ -32,6 +32,9 @@ python run.py
 
 - **原生 function calling**：`tools` + `tool_calls` + `role:"tool"`，不是自定义 JSON 协议。
 - **完整 SSE**：最终答案 token 级流式；每一步思考/工具/结果都推送到前端；原生 tool_call 的参数拼接和 ID 不暴露给 UI。
+- **安全 Markdown 渲染**：最终答案支持标题、粗体、列表、代码块、引用、GFM 表格、Markdown 链接和裸 URL autolink；只创建 DOM 节点，不使用 `innerHTML`。
+- **无依赖数学渲染**：Markdown 中的 `$...$`/`$$...$$`/`\(...\)`/`\[...\]` 进入独立 math 节点，由 `math.js` 渲染为透明 `math-surface`；支持分数、根号、上下标、常用符号、`\mathbf`、`\text`、基础 `aligned`。不引入 KaTeX/MathJax、外部字体或网络请求。
+- **外部链接确认**：点击正文链接、autolink 或 source chip 时先弹出“即将离开 MiniAgent”安全提醒，展示 host/完整 URL 和非 HTTPS 警告；取消/默认焦点都不跳转，确认后才在新标签打开。
 - **事务式 turn**：用户输入、工具结果、todo 修改和 assistant 消息先存在于内存 draft；整轮成功后才原子写入 session。失败/超步数/异常时整轮丢弃，不进入上下文。
 - **多窗口会话隔离**：`#/s/<session_id>` 绑定独立会话；A 窗口的 turns/todos 与 B 不共享；重启可续。
 - **简单记忆**：固定窗口 + 一次 LLM 滚动摘要；每 5 个已提交 turn 刷新全局用户画像。不做向量库/深层压缩。
@@ -76,7 +79,7 @@ agent/
   web/                    # HTTP API + SSE + 静态文件
 web/                      # 原生 HTML/CSS/ES Module
 docs/                     # 架构、验收
-scripts/                  # live_smoke / eval_tool_use
+scripts/                  # live_smoke / eval_tool_use / security_check
 data/ logs/               # 运行时生成（.gitignore）
 ```
 
@@ -127,6 +130,15 @@ python scripts/security_check.py
 
 ## 测试
 
+```powershell
+python -m unittest discover -s tests -v
+python -m compileall agent run.py scripts
+node web/js/markdown.test.mjs
+python scripts/security_check.py
+```
+
+当前：**50 Python tests + 12 Node Markdown/math tests, OK**。测试不访问外网；LLM 用脚本化流式替身，MCP 用本地 fake DeepSeek/Open-Meteo HTTP + 真实 MCP 子进程，API/SSE 用真实 `http.server` + loopback。生命周期测试覆盖页面心跳、最后一个页面关闭自动停止、注销清理；Node 测试覆盖 Markdown 表格/链接/XSS/URL allowlist，以及数学定界符、公式子集、代码块隔离和非法输入回退。
+
 真实联调（需要你的 DeepSeek Key 和网络）：
 
 ```powershell
@@ -147,8 +159,12 @@ python scripts/eval_tool_use.py     # 10 条真实 prompt 的工具选择评测
 - **失败不重试**：按需求保持简单；LLM/MCP 错误直接显示并丢弃本轮，不做退避/自动重连/断线恢复。
 - **生命周期**：`run.py` 自动开浏览器；页面用随机 client id 每 5 秒心跳，关闭最后一次页面后 8 秒宽限自动 `server.shutdown()`；活动 turn 未结束不会强停。
 - **安全注销**：注销只允许在没有活动 turn 时执行；先停 MCP，再删会话/画像/状态/日志，最后重置设置和 `.env` Key。
+- **输出渲染**：DeepSeek 返回的 Markdown 原文不改；前端用 `markdown.js` 安全解析为 DOM。旧 session 刷新后自动格式化，不需要迁移数据。
+- **数学分层**：Markdown 负责外层结构，数学片段作为受保护的 math 节点交给 `math.js`；渲染到透明 `.math-surface`，不解析 HTML、不加载远程资源。后续如果要换 KaTeX/MathJax，只替换数学层，Markdown 层和透明 surface 不变。
+- **外链确认**：`normalizeExternalUrl`/`isExternalUrl` 统一 http(s) allowlist；点击和 `auxclick`（中键）都会拦截到确认弹窗；浏览器右键菜单属于原生行为，页面无法完全阻止。
 
-更多细节见 [docs/architecture.md](docs/architecture.md) 
+更多细节见 [docs/architecture.md](docs/architecture.md)
+
 ## 限制
 
 - 单用户本地应用，无登录；不要直接暴露到公网。
@@ -156,6 +172,9 @@ python scripts/eval_tool_use.py     # 10 条真实 prompt 的工具选择评测
 - 关闭最后一个浏览器页面会停止后端；如需后台常驻，用 `--no-auto-shutdown`。
 - 一键注销不会删除父 shell 中手工 export 的 `AGENT_API_KEY`，需要自行 unset。
 - MCP 只实现 stdio；不做远程 HTTP MCP/第三方搜索 provider。
+- Markdown 只支持常用 GFM 子集；数学支持常用 LaTeX 子集（分数、根号、上下标、常用符号、基础 aligned），不做完整 LaTeX/Mermaid/图片加载/语法高亮；原始 HTML 按文本显示。
+- 外部链接的右键“在新标签打开”由浏览器控制，页面无法完全拦截；主点击、中键和键盘 Enter 都已加确认。
+- `security_check.py` 在存在本地 `data/`、`logs/` 或 `.env` 时会故意 FAIL，提醒上传前用一键注销或删除；这是保护机制，不是代码错误。
 - 计算为单变量高数范围；不做矩阵/多变量/符号积分。
 - 搜索/抓取的可用性和质量取决于 DeepSeek Search/Fetch 与目标站点。
 - UI 以 Chrome/Edge 等现代浏览器为目标；无构建步骤。

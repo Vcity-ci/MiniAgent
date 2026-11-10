@@ -1,4 +1,5 @@
 import { api, ApiError, streamMessage } from "./api.js";
+import { normalizeExternalUrl, isExternalUrl, renderMarkdownInto } from "./markdown.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -16,6 +17,8 @@ const state = {
   theme: localStorage.getItem("miniagent-theme") || "dark",
   editingProfile: false,
   renderScheduled: false,
+  pendingExternalUrl: null,
+  externalTrigger: null,
 };
 
 const clientId = globalThis.crypto && crypto.randomUUID
@@ -104,6 +107,13 @@ function cacheEls() {
   els.keyStatus = $("#key-status");
   els.drawer = $("#drawer");
   els.toastContainer = $("#toast-container");
+  els.externalModal = $("#external-link-modal");
+  els.externalUrl = $("#external-url");
+  els.externalHost = $("#external-host");
+  els.externalHttps = $("#external-https");
+  els.externalConfirm = $("#external-confirm");
+  els.externalCancel = $("#external-cancel");
+  els.externalClose = $("#external-close");
 }
 
 // ---------------------------------------------------------------------------
@@ -518,7 +528,11 @@ function renderTurn(turn, pending) {
 
   const answerText = pending ? (turn.final || turn.liveText || "") : turn.final || "";
   if (answerText || !turn.error) {
-    const answer = el("div", `answer ${pending && !turn.final ? "pending" : ""}`.trim(), answerText || (pending ? "…" : ""));
+    const answer = el(
+      "div",
+      `answer ${pending && !turn.final ? "pending" : ""}`.trim()
+    );
+    renderMarkdownInto(answer, answerText || (pending ? "…" : ""));
     body.appendChild(answer);
   }
 
@@ -563,7 +577,11 @@ function renderModelStep(step) {
   rail.appendChild(el("div", "step-dot"));
   const content = el("div", "step-content");
   content.appendChild(el("div", "step-label", step.text ? "说明" : "思考"));
-  if (step.text) content.appendChild(el("div", "step-text", step.text));
+  if (step.text) {
+    const stepText = el("div", "step-text");
+    renderMarkdownInto(stepText, step.text, { compact: true });
+    content.appendChild(stepText);
+  }
   if (step.reasoning) {
     const reasoning = el("details", "details");
     const summary = el("summary");
@@ -604,10 +622,11 @@ function renderSources(sources) {
   for (const source of sources) {
     const url = source && source.url ? String(source.url) : "";
     const title = source && source.title ? String(source.title) : url;
+    const normalized = normalizeExternalUrl(url);
     let chip;
-    if (/^https?:\/\//i.test(url)) {
-      chip = el("a", "source");
-      chip.href = url;
+    if (normalized) {
+      chip = el("a", "source external-link");
+      chip.href = normalized;
       chip.target = "_blank";
       chip.rel = "noopener noreferrer";
     } else {
@@ -617,6 +636,78 @@ function renderSources(sources) {
     wrap.appendChild(chip);
   }
   return wrap;
+}
+
+// ---------------------------------------------------------------------------
+// External links
+
+function showExternalLinkModal(url, trigger) {
+  const normalized = normalizeExternalUrl(url);
+  if (!normalized) {
+    toast("链接地址不合法，已阻止跳转", "error");
+    return;
+  }
+  let host = "";
+  try {
+    host = new URL(normalized).hostname;
+  } catch (_err) {
+    host = "";
+  }
+  state.pendingExternalUrl = normalized;
+  state.externalTrigger = trigger || null;
+  els.externalUrl.textContent = normalized;
+  els.externalHost.textContent = host ? `目标主机：${host}` : "";
+  const secure = normalized.startsWith("https://");
+  els.externalHttps.textContent = secure
+    ? "HTTPS 加密连接"
+    : "警告：该链接未使用 HTTPS，传输内容可能被窃听或篡改。";
+  els.externalHttps.classList.toggle("warn", !secure);
+  els.externalModal.classList.remove("hidden");
+  setTimeout(() => {
+    if (els.externalCancel) els.externalCancel.focus();
+  }, 20);
+}
+
+function closeExternalLinkModal({ restoreFocus = true } = {}) {
+  els.externalModal.classList.add("hidden");
+  state.pendingExternalUrl = null;
+  const trigger = state.externalTrigger;
+  state.externalTrigger = null;
+  if (restoreFocus && trigger && typeof trigger.focus === "function") {
+    try {
+      trigger.focus();
+    } catch (_err) {
+      // ignore
+    }
+  }
+}
+
+function confirmExternalLink() {
+  const url = state.pendingExternalUrl;
+  if (!url) {
+    closeExternalLinkModal();
+    return;
+  }
+  closeExternalLinkModal({ restoreFocus: false });
+  try {
+    // noopener/noreferrer avoids exposing this page and its opener to the
+    // third-party site. Some browsers return null for this form even on
+    // success, so do not treat null as a popup-blocker error.
+    window.open(url, "_blank", "noopener,noreferrer");
+  } catch (_err) {
+    toast("浏览器未能打开新标签页，请允许弹窗后重试", "error");
+  }
+}
+
+function handleExternalLinkClick(event) {
+  if (!event.target || typeof event.target.closest !== "function") return;
+  const anchor = event.target.closest("a[href]");
+  if (!anchor) return;
+  const href = anchor.getAttribute("href");
+  if (!href || !isExternalUrl(href, location.href)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  showExternalLinkModal(normalizeExternalUrl(href), anchor);
 }
 
 // ---------------------------------------------------------------------------
@@ -1204,6 +1295,17 @@ function bindEvents() {
   $("#profile-clear").addEventListener("click", clearProfile);
   $("#logout-button").addEventListener("click", logoutUser);
 
+  document.addEventListener("click", handleExternalLinkClick);
+  document.addEventListener("auxclick", (event) => {
+    if (event.button === 1) handleExternalLinkClick(event);
+  });
+  els.externalConfirm.addEventListener("click", confirmExternalLink);
+  els.externalCancel.addEventListener("click", () => closeExternalLinkModal());
+  els.externalClose.addEventListener("click", () => closeExternalLinkModal());
+  els.externalModal.addEventListener("click", (event) => {
+    if (event.target === els.externalModal) closeExternalLinkModal();
+  });
+
   window.addEventListener("hashchange", () => {
     const id = parseHash();
     if (id && (!state.current || state.current.id !== id)) {
@@ -1215,7 +1317,10 @@ function bindEvents() {
       event.preventDefault();
       openSettings();
     }
-    if (event.key === "Escape") closeSettings();
+    if (event.key === "Escape") {
+      if (!els.externalModal.classList.contains("hidden")) closeExternalLinkModal();
+      else closeSettings();
+    }
   });
 }
 

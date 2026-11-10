@@ -168,6 +168,30 @@ system 分层：
 - `text/event-stream`、HTTP/1.1 chunked、逐帧 flush。
 - 原始 `tool_calls` JSON、ID、参数拼接不发给前端；只在 `logs/trace.jsonl` 中保留。
 
+### 8.1 输出渲染与外链安全
+
+- DeepSeek 的 `message.content` 原样保存为 Markdown 字符串；SSE `final` 不做 HTML 转换。
+- 前端 `web/js/markdown.js` 负责安全渲染最终答案（以及执行详情里的说明文本）：
+  - 支持标题、粗体/斜体/删除线、列表、引用、围栏代码、GFM 管道表、Markdown 链接、裸 http(s) URL autolink；
+  - 只创建 DOM 节点并使用 `textContent`；不使用 `innerHTML`，不解析原始 HTML；
+  - 不加载 Markdown 图片，不预取链接；
+  - 链接只允许 http(s)，拒绝 `javascript:`/`data:`/`file:`/带凭据 URL；
+  - 表格外层横向滚动，限制列/行数量；解析失败回退纯文本。
+- 数学层 `web/js/math.js`：
+  - Markdown 解析器识别 `$...$` / `$$...$$` / `\(...\)` / `\[...\]`，生成受保护的 math 节点；
+  - `math.js` 使用零依赖 LaTeX 子集解析器，输出透明 `.math-surface` DOM；
+  - 支持常见符号、上下标、`\frac`、`\sqrt`、`\mathbf`、`\text`、基础 `aligned`/矩阵；
+  - 数学内部不解析 Markdown/HTML；未知命令可读回退；
+  - 不引入 KaTeX/MathJax、字体或外部网络请求；后续可替换数学层，Markdown 架构不变。
+- 外部链接确认：
+  - 点击、键盘 Enter 或 auxclick（中键）命中 `a[href]` 时，如果 origin 与当前页面不同，`preventDefault()` 并打开 `#external-link-modal`；
+  - 弹窗展示完整 URL、hostname；非 HTTPS 显示警告；默认焦点在“取消”；
+  - 确认后才 `window.open(url, "_blank")` 并清除 `opener`；弹窗被拦截时提示；
+  - source chips、Markdown 链接、裸 URL 共用同一套 guard；
+  - 浏览器右键菜单的“在新标签打开”属于浏览器原生行为，页面无法完全拦截。
+- 旧 session 的 final 字段无需迁移；刷新页面后由前端重新渲染。
+- 相关文件：[markdown.js](../web/js/markdown.js)、[math.js](../web/js/math.js)、[app.js](../web/js/app.js)、[app.css](../web/css/app.css)、[index.html](../web/index.html)。
+
 ## 9. 生命周期、一键注销与数据边界
 
 ### 页面生命周期
@@ -231,4 +255,7 @@ system 分层：
 | 上下文压缩 | 固定窗口 + LLM 滚动摘要 |
 | 异常/trace | 结构化错误 + JSONL + UI 执行详情 |
 | 生命周期/注销 | 自动开浏览器、页面关闭自动停后端、一键清空用户状态 |
-| 测试 | unittest 50 项 + live smoke/eval/security 脚本 |
+| Markdown/表格 | `markdown.js` 安全 DOM 渲染；旧 session 无需迁移 |
+| 数学公式 | `math.js` 零依赖 LaTeX 子集 + 透明 math surface |
+| 外链安全 | 第三方 URL 点击确认弹窗；http(s) allowlist；默认取消 |
+| 测试 | unittest 50 项 + Node Markdown/math 12 项 + live smoke/eval/security 脚本 |
