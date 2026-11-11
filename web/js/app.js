@@ -1,8 +1,12 @@
-import { api, ApiError, streamMessage } from "./api.js";
+import { api, ApiError, streamMessage, uploadImage } from "./api.js";
 import { normalizeExternalUrl, isExternalUrl, renderMarkdownInto } from "./markdown.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+const MAX_IMAGES = 4;
+const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
+const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
 const state = {
   sessions: [],
@@ -11,8 +15,10 @@ const state = {
   health: null,
   profile: null,
   sending: false,
+  uploading: false,
   pending: null,
   sendingSession: null,
+  attachments: [],
   filter: "",
   theme: localStorage.getItem("miniagent-theme") || "dark",
   editingProfile: false,
@@ -82,6 +88,10 @@ function cacheEls() {
   els.sendBtn = $("#send-btn");
   els.composerHint = $("#composer-hint");
   els.composerMeta = $("#composer-meta");
+  els.composerBox = $("#composer-box");
+  els.attachBtn = $("#attach-image");
+  els.imageInput = $("#image-input");
+  els.attachmentPreview = $("#attachment-preview");
   els.thinkingToggle = $("#thinking-toggle");
   els.onlineToggle = $("#online-toggle");
   els.llmDot = $("#llm-dot");
@@ -260,7 +270,7 @@ async function refreshAll() {
 // ---------------------------------------------------------------------------
 // Sessions
 
-async function createSession({ select = true } = {}) {
+async function createSession({ select = true, preserveDraft = false } = {}) {
   if (state.sending) {
     toast("请等待当前回答完成", "error");
     return null;
@@ -268,7 +278,7 @@ async function createSession({ select = true } = {}) {
   try {
     const data = await api("/api/sessions", { method: "POST", body: {} });
     await loadSessions();
-    if (select) await selectSession(data.session.id);
+    if (select) await selectSession(data.session.id, { preserveDraft });
     return data.session;
   } catch (err) {
     toastError(err);
@@ -276,10 +286,13 @@ async function createSession({ select = true } = {}) {
   }
 }
 
-async function selectSession(id) {
+async function selectSession(id, { preserveDraft = false } = {}) {
   if (state.sending) {
     toast("请等待当前回答完成", "error");
     return;
+  }
+  if (!preserveDraft && state.current && state.current.id !== id && state.attachments.length) {
+    clearAttachments();
   }
   try {
     await loadSession(id);
@@ -438,19 +451,105 @@ function renderStatus() {
   els.statusLine.textContent = text;
 }
 
+function visionSupported() {
+  return Boolean(state.settings && state.settings.vision_supported);
+}
+
+function formatBytes(value) {
+  if (!value) return "0 B";
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KiB`;
+  return `${value} B`;
+}
+
+function renderAttachments() {
+  const preview = els.attachmentPreview;
+  if (!preview) return;
+  clear(preview);
+  preview.classList.toggle("hidden", !state.attachments.length);
+  for (let index = 0; index < state.attachments.length; index += 1) {
+    const attachment = state.attachments[index];
+    const item = el("div", "attachment");
+    const thumb = el("img", "attachment-thumb");
+    thumb.src = attachment.previewUrl;
+    thumb.alt = attachment.name || "待发送图片";
+    const info = el("div", "attachment-info");
+    info.appendChild(el("div", "attachment-name", attachment.name || "图片"));
+    info.appendChild(el("div", "attachment-size", formatBytes(attachment.size)));
+    const remove = el("button", "attachment-remove", "×");
+    remove.type = "button";
+    remove.dataset.index = String(index);
+    remove.setAttribute("aria-label", "移除图片");
+    item.append(thumb, info, remove);
+    preview.appendChild(item);
+  }
+}
+
+function addImageFiles(files) {
+  const list = Array.from(files || []);
+  if (!list.length) return;
+  if (!visionSupported()) {
+    toast("当前模型不支持图片，请切换到 deepseek-flash", "error");
+    return;
+  }
+  for (const file of list) {
+    if (state.attachments.length >= MAX_IMAGES) {
+      toast(`每条消息最多 ${MAX_IMAGES} 张图片`, "error");
+      break;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      toast(`图片「${file.name || "未命名"}」超过 ${formatBytes(MAX_IMAGE_BYTES)}`, "error");
+      continue;
+    }
+    if (file.type && !IMAGE_TYPES.has(file.type)) {
+      toast("仅支持 JPEG、PNG、GIF、WebP 图片", "error");
+      continue;
+    }
+    state.attachments.push({
+      file,
+      previewUrl: URL.createObjectURL(file),
+      name: file.name || "image",
+      size: file.size,
+    });
+  }
+  renderComposer();
+}
+
+function clearAttachments() {
+  for (const attachment of state.attachments) {
+    if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+  }
+  state.attachments = [];
+  renderComposer();
+}
+
+function removeAttachment(index) {
+  const attachment = state.attachments[index];
+  if (!attachment) return;
+  if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+  state.attachments.splice(index, 1);
+  renderComposer();
+}
+
 function renderComposer() {
   const ready = hasKey();
   const disabled = !ready || state.sending || !state.current;
+  const canImages = ready && visionSupported();
   els.composer.disabled = disabled;
-  els.sendBtn.disabled = disabled;
+  els.sendBtn.disabled = disabled || state.uploading;
+  if (els.attachBtn) els.attachBtn.disabled = disabled || !canImages;
   els.composer.placeholder = ready
     ? "问点什么…（Enter 发送，Shift+Enter 换行）"
     : "请先在设置中配置 DeepSeek API Key";
   els.composerHint.textContent = !ready
     ? "未配置模型"
     : state.sending
-      ? "处理中…"
-      : "Enter 发送 · Shift+Enter 换行";
+      ? state.uploading
+        ? "正在上传图片…"
+        : "处理中…"
+      : !visionSupported()
+        ? "图片需切换 deepseek-flash"
+        : "Enter 发送 · Shift+Enter 换行";
   els.composerMeta.textContent = "";
   if (state.settings) {
     if (!ready) {
@@ -459,12 +558,16 @@ function renderComposer() {
     } else {
       els.composerMeta.appendChild(el("span", "", `model ${state.settings.model}`));
       els.composerMeta.appendChild(el("span", "", `max_steps ${state.settings.max_steps}`));
+      els.composerMeta.appendChild(
+        el("span", visionSupported() ? "" : "warn", visionSupported() ? "图片可用" : "图片不可用")
+      );
       if (state.settings.online) els.composerMeta.appendChild(el("span", "", "联网开启"));
       if (state.current) {
         els.composerMeta.appendChild(el("span", "", `历史 ${state.current.turn_count || 0} 轮`));
       }
     }
   }
+  renderAttachments();
   autoGrow();
 }
 
@@ -491,10 +594,37 @@ function renderChat() {
   }
 }
 
+function renderUserImages(images, pending) {
+  const grid = el("div", "user-images");
+  for (const image of images) {
+    if (!image) continue;
+    let src = "";
+    if (pending && image.preview_url) {
+      src = image.preview_url;
+    } else if (image.id && state.current) {
+      src = `/api/sessions/${state.current.id}/images/${image.id}`;
+    }
+    if (!src) continue;
+    const img = el("img", "user-image");
+    img.src = src;
+    img.alt = image.name || "用户上传的图片";
+    img.loading = "lazy";
+    img.decoding = "async";
+    grid.appendChild(img);
+  }
+  return grid;
+}
+
 function renderTurn(turn, pending) {
   const wrapper = el("div", "turn");
   const user = el("div", "msg-user");
-  user.appendChild(el("div", "user-bubble", turn.user || ""));
+  const bubble = el("div", "user-bubble");
+  const images = Array.isArray(turn.images) ? turn.images : [];
+  if (images.length) bubble.appendChild(renderUserImages(images, pending));
+  const userText = turn.user || "";
+  if (userText && userText !== "（图片）") bubble.appendChild(el("div", "user-text", userText));
+  if (!images.length) bubble.appendChild(el("div", "user-text", userText));
+  user.appendChild(bubble);
   wrapper.appendChild(user);
 
   const assistant = el("div", "assistant");
@@ -716,7 +846,8 @@ function handleExternalLinkClick(event) {
 async function sendMessage(textOverride) {
   if (state.sending) return;
   const text = (textOverride !== undefined ? textOverride : els.composer.value).trim();
-  if (!text) return;
+  const attachments = state.attachments.slice();
+  if (!text && !attachments.length) return;
   if (!hasKey()) {
     openSettings();
     toast("请先配置 DeepSeek API Key", "error");
@@ -726,19 +857,29 @@ async function sendMessage(textOverride) {
     toast("消息过长（上限 8000 字）", "error");
     return;
   }
+  if (attachments.length && !visionSupported()) {
+    toast("当前模型不支持图片，请切换到 deepseek-flash", "error");
+    return;
+  }
   if (!state.current) {
-    const session = await createSession({ select: true });
+    const session = await createSession({ select: true, preserveDraft: true });
     if (!session) return;
   }
   const sessionId = state.current.id;
   state.sending = true;
+  state.uploading = attachments.length > 0;
   state.sendingSession = sessionId;
   state.pending = {
-    user: text,
+    user: text || "（图片）",
+    images: attachments.map((attachment) => ({
+      name: attachment.name,
+      preview_url: attachment.previewUrl,
+      size: attachment.size,
+    })),
     steps: [],
     final: "",
     liveText: "",
-    statusText: "正在准备…",
+    statusText: attachments.length ? "准备上传图片…" : "正在准备…",
     sources: [],
     error: null,
     turnId: null,
@@ -746,6 +887,7 @@ async function sendMessage(textOverride) {
     currentStep: 0,
   };
   const pending = state.pending;
+  state.attachments = [];
   els.composer.value = "";
   autoGrow();
   renderComposer();
@@ -754,10 +896,22 @@ async function sendMessage(textOverride) {
   scrollBottom();
 
   let streamError = null;
+  let uploaded = [];
   try {
+    for (let index = 0; index < attachments.length; index += 1) {
+      pending.statusText = `上传图片 ${index + 1}/${attachments.length}…`;
+      scheduleRender();
+      const image = await uploadImage(sessionId, attachments[index].file);
+      uploaded.push({ ...image, preview_url: attachments[index].previewUrl });
+      pending.images = uploaded.slice();
+      scheduleRender();
+    }
+    state.uploading = false;
+    renderComposer();
     await streamMessage(
       sessionId,
       text,
+      uploaded.map((image) => image.id),
       (event, data) => {
         if (event === "turn_start") {
           pending.turnId = data.turn_id;
@@ -814,6 +968,7 @@ async function sendMessage(textOverride) {
           pending.final = data.turn ? data.turn.final || "" : "";
           pending.steps = data.turn && data.turn.steps ? data.turn.steps : pending.steps;
           pending.sources = data.sources || (data.turn && data.turn.sources) || [];
+          if (data.turn && Array.isArray(data.turn.images)) pending.images = data.turn.images;
           pending.statusText = "完成";
           pending.liveText = pending.final;
           if (data.title && state.current) state.current.title = data.title;
@@ -838,6 +993,7 @@ async function sendMessage(textOverride) {
   const completed = Boolean(pending.final) || Boolean(pending.committed);
   const failed = Boolean(streamError || pending.error || !completed);
   state.sending = false;
+  state.uploading = false;
   state.sendingSession = null;
   state.pending = null;
   if (streamError) {
@@ -846,9 +1002,14 @@ async function sendMessage(textOverride) {
   if (failed) {
     if (state.current && state.current.id === sessionId) {
       els.composer.value = text;
+      state.attachments = attachments;
       autoGrow();
     }
     toast("本轮未保存；可以修改后重新发送", "error");
+  } else {
+    for (const attachment of attachments) {
+      if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+    }
   }
   try {
     if (state.current && state.current.id === sessionId) {
@@ -1180,8 +1341,10 @@ async function logoutUser() {
   try {
     const result = await api("/api/account/logout", { method: "POST", body: {} });
     state.sending = false;
+    state.uploading = false;
     state.sendingSession = null;
     state.pending = null;
+    clearAttachments();
     state.sessions = [];
     state.current = null;
     state.editingProfile = false;
@@ -1243,6 +1406,32 @@ function bindEvents() {
   $("#theme-toggle").addEventListener("click", () => applyTheme(state.theme === "dark" ? "light" : "dark"));
 
   $("#send-btn").addEventListener("click", () => sendMessage());
+  els.attachBtn.addEventListener("click", () => els.imageInput.click());
+  els.imageInput.addEventListener("change", (event) => {
+    addImageFiles(event.target.files);
+    event.target.value = "";
+  });
+  els.attachmentPreview.addEventListener("click", (event) => {
+    const button = event.target.closest(".attachment-remove");
+    if (!button) return;
+    removeAttachment(Number(button.dataset.index));
+  });
+  els.composer.addEventListener("paste", (event) => {
+    const files = event.clipboardData && event.clipboardData.files;
+    if (files && files.length) {
+      event.preventDefault();
+      addImageFiles(files);
+    }
+  });
+  els.composerBox.addEventListener("dragover", (event) => {
+    event.preventDefault();
+  });
+  els.composerBox.addEventListener("drop", (event) => {
+    event.preventDefault();
+    if (event.dataTransfer && event.dataTransfer.files.length) {
+      addImageFiles(event.dataTransfer.files);
+    }
+  });
   els.composer.addEventListener("input", autoGrow);
   els.composer.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {

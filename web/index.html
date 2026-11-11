@@ -72,9 +72,14 @@
 
         <div class="composer-wrap">
           <div class="composer" id="composer-box">
+            <div class="attachment-preview hidden" id="attachment-preview"></div>
             <textarea id="composer" rows="1" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）" autocomplete="off"></textarea>
             <div class="composer-actions">
-              <div class="composer-hint" id="composer-hint">Enter 发送 · Shift+Enter 换行</div>
+              <div class="composer-tools">
+                <button type="button" class="attach-btn" id="attach-image" aria-label="添加图片">＋ 图片</button>
+                <input id="image-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple hidden>
+                <div class="composer-hint" id="composer-hint">Enter 发送 · Shift+Enter 换行</div>
+              </div>
               <button class="send-btn" id="send-btn" aria-label="发送">发送</button>
             </div>
           </div>

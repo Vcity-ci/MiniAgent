@@ -26,6 +26,18 @@ TOOL_RESULT_MAX_CHARS = 4000
 SUMMARY_MAX_CHARS = 500
 PROFILE_MAX_CHARS = 500
 
+# Vision input (DeepSeek: deepseek-flash only; images are inline base64).
+VISION_MODELS = ("deepseek-flash", "deepseek-v4-flash-vision-exp")
+MAX_IMAGES_PER_TURN = 4
+MAX_IMAGE_BYTES = 6 * 1024 * 1024
+MAX_REQUEST_IMAGE_BYTES = 24 * 1024 * 1024
+MAX_IMAGE_SIDE = 8192
+MAX_IMAGE_NAME_CHARS = 120
+
+
+def supports_vision(model: str) -> bool:
+    return (model or "").strip() in VISION_MODELS
+
 LLM_TIMEOUT = 120.0
 MAINTENANCE_TIMEOUT = 90.0
 MCP_START_TIMEOUT = 15.0

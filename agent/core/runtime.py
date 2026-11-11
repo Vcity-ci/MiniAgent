@@ -24,6 +24,7 @@ from ..llm import LLMResult
 from ..tools import ToolContext, ToolRegistry, ToolResult, build_default_registry
 from ..util import json_dumps, new_id, now_iso, truncate
 from .context import build_messages, context_stats, maybe_summarize
+from .images import ImageStore
 from .events import EventEmitter
 from .profile import ProfileManager
 from .session import Turn
@@ -52,6 +53,7 @@ class TurnDraft:
     steps: list[dict] = field(default_factory=list)
     sources: list[dict] = field(default_factory=list)
     usage: dict = field(default_factory=dict)
+    images: list[dict] = field(default_factory=list)
     final: str = ""
     trace_id: str = ""
     started_at: float = field(default_factory=time.monotonic)
@@ -69,6 +71,7 @@ class Runtime:
         llm_factory: Callable[[Any], Any],
         mcp=None,
         base_registry: ToolRegistry | None = None,
+        images: ImageStore | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
@@ -78,6 +81,7 @@ class Runtime:
         self.llm_factory = llm_factory
         self.mcp = mcp
         self.base_registry = base_registry or build_default_registry()
+        self.images = images
 
     # -- helpers -------------------------------------------------------------
 
@@ -152,41 +156,120 @@ class Runtime:
 
     # -- main entry ----------------------------------------------------------
 
-    def handle(self, session_id: str, content: str, emitter: EventEmitter) -> Turn | None:
+    def handle(
+        self,
+        session_id: str,
+        content: str,
+        emitter: EventEmitter,
+        image_ids: list[str] | None = None,
+    ) -> Turn | None:
         content = (content or "").strip()
-        if not content:
+        raw_ids = list(image_ids or [])
+        if not content and not raw_ids:
             raise InvalidRequest("消息不能为空")
         if len(content) > config.MAX_INPUT_CHARS:
             raise InvalidRequest(
                 f"消息过长（上限 {config.MAX_INPUT_CHARS} 字）",
                 hint="请分段发送或先总结",
             )
+        if len(raw_ids) > config.MAX_IMAGES_PER_TURN:
+            raise InvalidRequest(
+                f"每条消息最多 {config.MAX_IMAGES_PER_TURN} 张图片",
+                code="too_many_images",
+            )
+        ids: list[str] = []
+        for raw in raw_ids:
+            if not isinstance(raw, str) or not raw.strip():
+                raise InvalidRequest("image_ids 必须是图片 ID 字符串")
+            value = raw.strip()
+            if value not in ids:
+                ids.append(value)
+        if len(ids) > config.MAX_IMAGES_PER_TURN:
+            raise InvalidRequest(
+                f"每条消息最多 {config.MAX_IMAGES_PER_TURN} 张图片",
+                code="too_many_images",
+            )
 
         with self.store.lock(session_id):
             session = self.store.get(session_id)
             settings = self.settings.snapshot()
+            if ids and not config.supports_vision(settings.model):
+                raise InvalidRequest(
+                    "当前模型不支持图片，请切换到 deepseek-flash",
+                    code="vision_unsupported",
+                    hint="deepseek-v4-pro 仅支持文本",
+                )
+            image_meta: list[dict] = []
+            image_bytes = 0
+            user_content: str | list[dict]
+            if ids:
+                if self.images is None:
+                    raise InvalidRequest("图片存储未初始化", code="image_store_unavailable")
+                for image_id in ids:
+                    raw, info = self.images.read(session.id, image_id)
+                    image_bytes += len(raw)
+                    image_meta.append(
+                        {
+                            "id": image_id,
+                            "mime": info["mime"],
+                            "bytes": len(raw),
+                            "width": info["width"],
+                            "height": info["height"],
+                            "name": f"image.{info['ext']}",
+                            "created_at": now_iso(),
+                        }
+                    )
+                if image_bytes > config.MAX_REQUEST_IMAGE_BYTES:
+                    raise InvalidRequest(
+                        "本轮图片总大小超过限制",
+                        code="image_too_large",
+                        http_status=413,
+                    )
+                user_blocks: list[dict] = [
+                    {"type": "text", "text": content or "请描述这张图片。"}
+                ]
+                user_blocks.extend(
+                    {"type": "image_ref", "image_id": image_id} for image_id in ids
+                )
+                user_content = user_blocks
+            else:
+                user_content = content
+
             client = self.llm_factory(settings)
             turn_id = new_id("t")
             trace_id = new_id("tr")
+            display_user = content or "（图片）"
             draft = TurnDraft(
                 id=turn_id,
-                user=content,
-                messages=[{"role": "user", "content": content}],
+                user=display_user,
+                messages=[{"role": "user", "content": user_content}],
                 todos=copy.deepcopy(session.todos),
                 next_todo_id=int(session.next_todo_id or 1),
+                images=image_meta,
                 trace_id=trace_id,
             )
             started = time.monotonic()
             emitter.emit(
                 "turn_start",
-                {"turn_id": turn_id, "session_id": session.id, "user": content},
+                {
+                    "turn_id": turn_id,
+                    "session_id": session.id,
+                    "user": display_user,
+                    "images": copy.deepcopy(image_meta),
+                },
             )
             self.trace.log(
                 "turn_start",
                 trace_id=trace_id,
                 session_id=session.id,
                 turn_id=turn_id,
-                data={"chars": len(content), "thinking": settings.thinking, "online": settings.online},
+                data={
+                    "chars": len(content),
+                    "images": len(image_meta),
+                    "image_bytes": image_bytes,
+                    "thinking": settings.thinking,
+                    "online": settings.online,
+                },
             )
             try:
                 # Optional maintenance, based only on already-committed turns.
@@ -226,7 +309,13 @@ class Runtime:
                     messages = build_messages(
                         session, draft, settings, profile, online_status
                     )
+                    image_stats = {"images_sent": 0, "images_omitted": 0, "image_bytes": 0}
+                    if self.images is not None:
+                        messages, image_stats = self.images.hydrate_messages(
+                            messages, session.id
+                        )
                     stats = context_stats(session, draft, settings, profile, online_status)
+                    stats.update(image_stats)
                     self.trace.log(
                         "context",
                         trace_id=trace_id,
@@ -247,6 +336,7 @@ class Runtime:
                             "messages": len(messages),
                             "tools": [spec.name for spec in registry.all()],
                             "online": online_status.get("status"),
+                            **image_stats,
                         },
                     )
                     emitter.emit("status", {"text": "模型生成中"})
@@ -419,6 +509,7 @@ class Runtime:
                     final=draft.final,
                     sources=copy.deepcopy(draft.sources),
                     usage=dict(draft.usage),
+                    images=copy.deepcopy(draft.images),
                     created_at=now_iso(),
                     trace_id=draft.trace_id,
                 )
@@ -431,7 +522,7 @@ class Runtime:
                     int(session.next_todo_id or 1), int(draft.next_todo_id or 1)
                 )
                 if not session.title:
-                    session.title = session.default_title(content)
+                    session.title = session.default_title(display_user)
                 session.updated_at = now_iso()
                 self.store.save(session)
                 self.trace.log(
@@ -444,6 +535,7 @@ class Runtime:
                         "steps": len(turn.steps),
                         "final_chars": len(turn.final),
                         "sources": len(turn.sources),
+                        "images": len(turn.images),
                         "todos": len(session.todos),
                         "usage": turn.usage,
                     },

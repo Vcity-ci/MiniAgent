@@ -21,6 +21,7 @@ class Turn:
     final: str
     sources: list[dict] = field(default_factory=list)
     usage: dict = field(default_factory=dict)
+    images: list[dict] = field(default_factory=list)
     created_at: str = field(default_factory=now_iso)
     trace_id: str = ""
     global_seq: int = 0
@@ -33,6 +34,7 @@ class Turn:
             "final": self.final,
             "sources": copy.deepcopy(self.sources),
             "usage": copy.deepcopy(self.usage),
+            "images": copy.deepcopy(self.images),
             "created_at": self.created_at,
             "trace_id": self.trace_id,
         }
@@ -46,6 +48,7 @@ class Turn:
             "final": self.final,
             "sources": copy.deepcopy(self.sources),
             "usage": copy.deepcopy(self.usage),
+            "images": copy.deepcopy(self.images),
             "created_at": self.created_at,
             "trace_id": self.trace_id,
             "global_seq": self.global_seq,
@@ -61,6 +64,7 @@ class Turn:
             final=str(data.get("final") or ""),
             sources=list(data.get("sources") or []),
             usage=dict(data.get("usage") or {}),
+            images=list(data.get("images") or []),
             created_at=str(data.get("created_at") or now_iso()),
             trace_id=str(data.get("trace_id") or ""),
             global_seq=int(data.get("global_seq") or 0),

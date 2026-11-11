@@ -51,11 +51,34 @@ export async function api(path, { method = "GET", body } = {}) {
   }
 }
 
+export async function uploadImage(sessionId, file) {
+  let response;
+  try {
+    response = await fetch(`/api/sessions/${sessionId}/uploads`, {
+      method: "POST",
+      headers: {
+        "Content-Type": file.type || "application/octet-stream",
+        "X-Agent-Client": CLIENT_HEADER,
+        "X-Image-Name": encodeURIComponent(file.name || ""),
+      },
+      body: file,
+    });
+  } catch (err) {
+    throw new ApiError(`图片上传失败：${err.message}`, { code: "network_error" });
+  }
+  if (!response.ok) throw await errorFromResponse(response);
+  const data = await response.json();
+  if (!data || !data.image) {
+    throw new ApiError("图片上传返回格式不正确", { code: "bad_response" });
+  }
+  return data.image;
+}
+
 /**
  * POST a message and consume the agent's SSE stream.
  * onEvent(eventName, data) is called for every named event.
  */
-export async function streamMessage(sessionId, content, onEvent, signal) {
+export async function streamMessage(sessionId, content, imageIds, onEvent, signal) {
   let response;
   try {
     response = await fetch(`/api/sessions/${sessionId}/messages`, {
@@ -65,7 +88,10 @@ export async function streamMessage(sessionId, content, onEvent, signal) {
         Accept: "text/event-stream",
         "X-Agent-Client": CLIENT_HEADER,
       },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({
+        content,
+        image_ids: Array.isArray(imageIds) ? imageIds : [],
+      }),
       signal,
     });
   } catch (err) {

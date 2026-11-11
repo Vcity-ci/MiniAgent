@@ -6,7 +6,7 @@ import logging
 import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .. import config
 from ..core.events import EventEmitter
@@ -16,7 +16,13 @@ from .app import AppContext
 
 
 LOG = logging.getLogger("miniagent.http")
-SESSION_PATH = re.compile(r"^/api/sessions/(s_[a-f0-9]{12})(/messages|/trace)?$")
+SESSION_PATH = re.compile(
+    r"^/api/sessions/(s_[a-f0-9]{12})(/messages|/trace|/uploads)?$"
+)
+IMAGE_PATH = re.compile(
+    r"^/api/sessions/(s_[a-f0-9]{12})/images/(img_[a-f0-9]{12})$"
+)
+UPLOAD_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp", "application/octet-stream"}
 
 
 class SSEEmitter(EventEmitter):
@@ -106,6 +112,27 @@ class Handler(BaseHTTPRequestHandler):
             raise InvalidRequest("请求体必须是 JSON 对象")
         return data
 
+    def _read_image_body(self) -> bytes:
+        length = self.headers.get("Content-Length")
+        if length is None:
+            raise InvalidRequest("缺少 Content-Length", http_status=411)
+        try:
+            size = int(length)
+        except ValueError:
+            raise InvalidRequest("Content-Length 不合法") from None
+        if size <= 0:
+            raise InvalidRequest("图片内容为空")
+        if size > config.MAX_IMAGE_BYTES:
+            raise InvalidRequest(
+                f"单张图片不能超过 {config.MAX_IMAGE_BYTES // (1024 * 1024)} MiB",
+                code="image_too_large",
+                http_status=413,
+            )
+        raw = self.rfile.read(size)
+        if len(raw) != size:
+            raise InvalidRequest("图片请求体不完整", code="invalid_image")
+        return raw
+
     def _csrf(self, relaxed: bool = False) -> None:
         if self.command not in {"POST", "PUT", "PATCH", "DELETE"}:
             return
@@ -135,6 +162,22 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
             raise ClientDisconnected() from None
+
+    def _serve_session_image(self, session_id: str, image_id: str) -> None:
+        self.app.store.get(session_id)
+        raw, info = self.app.images.read(session_id, image_id)
+        self.send_response(200)
+        self.send_header("Content-Type", info["mime"])
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "private, no-store")
+        self.send_header("Content-Disposition", "inline")
+        self._security_headers()
+        self.end_headers()
+        try:
+            self.wfile.write(raw)
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
     # -- static files --------------------------------------------------------
 
@@ -190,6 +233,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/sessions":
                 self._send_json(200, {"sessions": self.app.store.list_summaries()})
+                return
+            image_match = IMAGE_PATH.match(path)
+            if image_match:
+                self._serve_session_image(image_match.group(1), image_match.group(2))
                 return
             match = SESSION_PATH.match(path)
             if match and match.group(2) is None:
@@ -251,12 +298,15 @@ class Handler(BaseHTTPRequestHandler):
                 status = 200 if outcome.get("updated") else 502
                 self._send_json(status, {"ok": bool(outcome.get("updated")), **outcome})
                 return
+            match = SESSION_PATH.match(path)
+            if match and match.group(2) == "/uploads":
+                self._handle_upload(match.group(1))
+                return
             if path == "/api/sessions":
                 payload = self._read_json()
                 session = self.app.store.create(str(payload.get("title") or ""))
                 self._send_json(200, {"session": session.to_public()})
                 return
-            match = SESSION_PATH.match(path)
             if match and match.group(2) == "/messages":
                 self._handle_message(match.group(1))
                 return
@@ -317,23 +367,73 @@ class Handler(BaseHTTPRequestHandler):
                 if self.app.store.is_busy(match.group(1)):
                     raise AgentError("会话正在处理中，暂时不能删除", code="session_busy", http_status=409)
                 self.app.store.delete(match.group(1))
+                self.app.images.delete_session(match.group(1))
                 self._send_json(200, {"ok": True})
                 return
             self._send_json(404, {"error": {"code": "not_found", "message": "接口不存在"}})
         except BaseException as exc:
             self._error(exc)
 
+    # -- image upload --------------------------------------------------------
+
+    def _handle_upload(self, session_id: str) -> None:
+        # Uploads are raw bodies; close after the response so an early
+        # rejection cannot leave unread bytes to be parsed as another request.
+        self.close_connection = True
+        self.app.store.get(session_id)
+        if self.app.store.is_busy(session_id):
+            raise AgentError("该会话正在处理上一条消息", code="session_busy", http_status=409)
+        settings = self.app.settings.snapshot()
+        if not config.supports_vision(settings.model):
+            raise InvalidRequest(
+                "当前模型不支持图片，请切换到 deepseek-flash",
+                code="vision_unsupported",
+                hint="deepseek-v4-pro 仅支持文本",
+            )
+        content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if content_type not in UPLOAD_TYPES:
+            raise InvalidRequest(
+                "图片 Content-Type 不被支持",
+                code="unsupported_image_type",
+                http_status=415,
+            )
+        raw = self._read_image_body()
+        raw_name = unquote(self.headers.get("X-Image-Name") or "")
+        image = self.app.images.create(session_id, raw, raw_name)
+        self._send_json(201, {"image": image})
+
     # -- SSE turn ------------------------------------------------------------
 
     def _handle_message(self, session_id: str) -> None:
         payload = self._read_json()
         content = payload.get("content")
-        if not isinstance(content, str) or not content.strip():
+        if content is None:
+            content = ""
+        if not isinstance(content, str):
+            raise InvalidRequest("content 必须是字符串")
+        content = content.strip()
+        image_ids = payload.get("image_ids")
+        if image_ids is None:
+            image_ids = []
+        if not isinstance(image_ids, list):
+            raise InvalidRequest("image_ids 必须是数组")
+        if len(image_ids) > config.MAX_IMAGES_PER_TURN:
+            raise InvalidRequest(
+                f"每条消息最多 {config.MAX_IMAGES_PER_TURN} 张图片",
+                code="too_many_images",
+            )
+        if not content and not image_ids:
             raise InvalidRequest("content 不能为空")
-        if len(content.strip()) > config.MAX_INPUT_CHARS:
+        if len(content) > config.MAX_INPUT_CHARS:
             raise InvalidRequest(f"消息过长（上限 {config.MAX_INPUT_CHARS} 字）", http_status=413)
         self.app.store.get(session_id)
         settings = self.app.settings.snapshot()
+        if image_ids and not config.supports_vision(settings.model):
+            raise InvalidRequest(
+                "当前模型不支持图片，请切换到 deepseek-flash",
+                code="vision_unsupported",
+                hint="deepseek-v4-pro 仅支持文本",
+            )
         if not settings.api_key:
             raise AgentError(
                 "尚未配置 DeepSeek API Key",
@@ -360,7 +460,9 @@ class Handler(BaseHTTPRequestHandler):
         emitter = SSEEmitter(self)
         self.app.begin_turn()
         try:
-            self.app.runtime.handle(session_id, content, emitter)
+            self.app.runtime.handle(
+                session_id, content, emitter, image_ids=image_ids
+            )
         except AgentError as exc:
             try:
                 emitter.emit("error", exc.to_dict())

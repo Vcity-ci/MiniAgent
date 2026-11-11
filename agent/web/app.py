@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .. import config
+from ..core.images import ImageStore
 from ..core.profile import ProfileManager
 from ..core.runtime import Runtime
 from ..core.store import GlobalState, SessionStore
@@ -72,6 +73,7 @@ class AppContext:
         log_dir: Path,
         env_path: Path,
         clients: ClientRegistry | None = None,
+        images: ImageStore | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
@@ -84,6 +86,7 @@ class AppContext:
         self.data_dir = data_dir
         self.log_dir = log_dir
         self.env_path = env_path
+        self.images = images or ImageStore(data_dir)
         self.clients = clients or ClientRegistry(
             timeout=config.CLIENT_HEARTBEAT_TIMEOUT,
             grace=config.CLIENT_SHUTDOWN_GRACE,
@@ -128,6 +131,7 @@ class AppContext:
     def settings_view(self) -> dict:
         view = self.settings.public()
         view["online_status"] = self.online_status()
+        view["vision_supported"] = config.supports_vision(view.get("model") or "")
         return view
 
     def profile_view(self) -> dict:
@@ -241,6 +245,7 @@ class AppContext:
         except Exception:
             pass
         sessions = self.store.purge()
+        images_removed = self.images.purge()
         profile_removed = self.profile.reset()
         self.state.reset()
         trace_removed = self.trace.purge()
@@ -252,6 +257,7 @@ class AppContext:
             "ok": True,
             "cleared": {
                 "sessions_removed": sessions,
+                "images_removed": images_removed,
                 "profile_removed": bool(profile_removed),
                 "state_reset": True,
                 "trace_removed": bool(trace_removed),
@@ -293,6 +299,7 @@ def create_app(
     store = SessionStore(data_dir)
     state = GlobalState(data_dir)
     profile = ProfileManager(data_dir)
+    images = ImageStore(data_dir)
     mcp_manager = mcp if mcp is not None else MCPManager(config.ROOT, trace)
     registry = build_default_registry()
     runtime = Runtime(
@@ -304,6 +311,7 @@ def create_app(
         llm_factory=llm_factory or make_client,
         mcp=mcp_manager,
         base_registry=registry,
+        images=images,
     )
     app = AppContext(
         settings=settings,
@@ -318,6 +326,7 @@ def create_app(
         log_dir=log_dir,
         env_path=Path(env_path) if env_path else (config.ROOT / ".env"),
         clients=clients,
+        images=images,
     )
     if settings.snapshot().online:
         try:

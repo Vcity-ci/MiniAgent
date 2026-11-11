@@ -402,6 +402,24 @@ button { cursor: pointer; }
   line-height: 1.6;
   font-size: 13.5px;
 }
+.user-images {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.user-image {
+  width: 112px;
+  height: 112px;
+  object-fit: cover;
+  border-radius: 11px;
+  border: 1px solid rgba(122, 162, 255, 0.22);
+  background: var(--bg-soft);
+  display: block;
+}
+.user-text { white-space: pre-wrap; }
+.user-images + .user-text { margin-top: 8px; }
 
 .assistant { display: flex; gap: 11px; align-items: flex-start; max-width: 100%; }
 .avatar {
@@ -880,7 +898,63 @@ button { cursor: pointer; }
 }
 .composer textarea::placeholder { color: var(--text-faint); }
 .composer-actions { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.composer-tools { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; }
 .composer-hint { flex: 1; color: var(--text-faint); font-size: 10.5px; }
+.attach-btn {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text-dim);
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.attach-btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.attach-btn:disabled { opacity: 0.45; cursor: default; }
+.attachment-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 2px 2px 9px;
+}
+.attachment {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-soft);
+  border-radius: 9px;
+  padding: 4px 6px;
+}
+.attachment-thumb {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: var(--bg);
+}
+.attachment-info { min-width: 0; }
+.attachment-name {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 10.5px;
+}
+.attachment-size { color: var(--text-faint); font-size: 9.5px; margin-top: 2px; }
+.attachment-remove {
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px;
+}
+.attachment-remove:hover { color: var(--red); }
 .send-btn {
   border: 0;
   background: var(--accent-strong);

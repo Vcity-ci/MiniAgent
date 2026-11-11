@@ -192,6 +192,18 @@ system 分层：
 - 旧 session 的 final 字段无需迁移；刷新页面后由前端重新渲染。
 - 相关文件：[markdown.js](../web/js/markdown.js)、[math.js](../web/js/math.js)、[app.js](../web/js/app.js)、[app.css](../web/css/app.css)、[index.html](../web/index.html)。
 
+### 8.2 图片输入与视觉上下文
+
+- 仅 `deepseek-flash`（兼容旧 vision 名）支持图片；`deepseek-v4-pro` 在设置、上传和消息接口三处拒绝。
+- 格式：JPEG/PNG/GIF/WebP，按实际字节 sniff；单图 6 MiB、单边 ≤8192 px、最多 4 张/轮。
+- 上传：`POST /api/sessions/{sid}/uploads` raw bytes；`ImageStore` 原子写 `data/uploads/<sid>/<image_id>.<ext>`。
+- Session schema：`Turn.images` 保存公开元数据；`Turn.messages` 内 image 用内部 `image_ref` 占位，**不保存 base64**。
+- 请求前：`ImageStore.hydrate_messages()` 把 `image_ref` 替换成 `user` 消息的 `image_url` data URL；按最新优先最多 24 MiB 原始图片，超预算旧图替换为文本占位。
+- 查看：`GET /api/sessions/{sid}/images/{image_id}`，同源、`no-store`、无路径暴露；session 删除/注销清空 uploads。
+- 模型门禁：图片只出现在 `user` 消息；`system`/`assistant` 出现 image_ref 视为内部错误。
+- 不接 Files API/外部图片 URL；不本地 OCR；图片会发送给 DeepSeek 识别。
+- 相关文件：[images.py](../agent/core/images.py)、[session.py](../agent/core/session.py)、[runtime.py](../agent/core/runtime.py)、[http.py](../agent/web/http.py)、[app.py](../agent/web/app.py)。
+
 ## 9. 生命周期、一键注销与数据边界
 
 ### 页面生命周期
@@ -226,6 +238,7 @@ system 分层：
 | 一键注销 | 重置，Key 清除 | 全部删除 |
 
 - 持久化只涉及 `data/`、`logs/` 和可选 `.env`；三者都在 `.gitignore` 中，clone 后不存在。
+- 图片保存在 `data/uploads/<session_id>/`；注销和删除 session 会清理，session JSON 只保存元数据/占位符。
 - `scripts/security_check.py` 检查 `.gitignore`、根目录残留 `.env`/`data`/`logs`、源码中明显的 `sk-*`/`AGENT_API_KEY=` 字面量；不打印匹配值。
 - `_acl_recovery/`、`tests/.tmp/` 等本地被忽略目录会在安全脚本中 warning；打包 zip 前应删除。
 
@@ -257,5 +270,6 @@ system 分层：
 | 生命周期/注销 | 自动开浏览器、页面关闭自动停后端、一键清空用户状态 |
 | Markdown/表格 | `markdown.js` 安全 DOM 渲染；旧 session 无需迁移 |
 | 数学公式 | `math.js` 零依赖 LaTeX 子集 + 透明 math surface |
+| 图片输入 | `deepseek-flash` 视觉；本地 uploads + image_ref hydration |
 | 外链安全 | 第三方 URL 点击确认弹窗；http(s) allowlist；默认取消 |
-| 测试 | unittest 50 项 + Node Markdown/math 12 项 + live smoke/eval/security 脚本 |
+| 测试 | unittest 66 项 + Node Markdown/math 12 项 + live smoke/eval/security 脚本 |
