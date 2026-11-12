@@ -137,10 +137,11 @@ python scripts/security_check.py
 python -m unittest discover -s tests -v
 python -m compileall agent run.py scripts
 node web/js/markdown.test.mjs
+node web/js/ui-state.test.mjs
 python scripts/security_check.py
 ```
 
-当前：**66 Python tests + 12 Node Markdown/math tests, OK**。测试不访问外网；LLM 用脚本化流式替身，MCP 用本地 fake DeepSeek/Open-Meteo HTTP + 真实 MCP 子进程，API/SSE 用真实 `http.server` + loopback。生命周期测试覆盖页面心跳、最后一个页面关闭自动停止、注销清理；Node 测试覆盖 Markdown 表格/链接/XSS/URL allowlist，以及数学定界符、公式子集、代码块隔离和非法输入回退；图片测试覆盖格式/尺寸/预算、上传/查看、模型门禁、图片-only、注销清理和无 base64 持久化。
+当前：**66 Python tests + 14 Node Markdown/math/UI-state tests, OK**。测试不访问外网；LLM 用脚本化流式替身，MCP 用本地 fake DeepSeek/Open-Meteo HTTP + 真实 MCP 子进程，API/SSE 用真实 `http.server` + loopback。生命周期测试覆盖页面心跳、最后一个页面关闭自动停止、注销清理；Node 测试覆盖 Markdown 表格/链接/XSS/URL allowlist、数学定界符/公式子集，以及用户文本单次渲染/底部跟随判定；图片测试覆盖格式/尺寸/预算、上传/查看、模型门禁、图片-only、注销清理和无 base64 持久化。
 
 真实联调（需要你的 DeepSeek Key 和网络）：
 

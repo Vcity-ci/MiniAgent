@@ -1,5 +1,6 @@
 import { api, ApiError, streamMessage, uploadImage } from "./api.js";
 import { normalizeExternalUrl, isExternalUrl, renderMarkdownInto } from "./markdown.js";
+import { isNearBottom, shouldShowUserText } from "./ui-state.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -23,6 +24,7 @@ const state = {
   theme: localStorage.getItem("miniagent-theme") || "dark",
   editingProfile: false,
   renderScheduled: false,
+  followOutput: true,
   pendingExternalUrl: null,
   externalTrigger: null,
 };
@@ -193,13 +195,14 @@ function scheduleRender() {
   state.renderScheduled = true;
   requestAnimationFrame(() => {
     state.renderScheduled = false;
-    renderChat();
-    scrollBottom();
+    renderChat({ preserveScroll: true });
   });
 }
 
-function scrollBottom() {
+function scrollBottom(force = false) {
   if (!els.messages) return;
+  if (!force && !state.followOutput) return;
+  state.followOutput = true;
   els.messages.scrollTop = els.messages.scrollHeight;
 }
 
@@ -250,16 +253,15 @@ async function loadSessions() {
   renderSessions();
 }
 
-async function loadSession(id, { push = true } = {}) {
+async function loadSession(id, { push = true, preserveScroll = false } = {}) {
   const data = await api(`/api/sessions/${id}`);
   state.current = data.session;
   if (push) history.replaceState(null, "", `#/s/${id}`);
   renderHeader();
-  renderChat();
+  renderChat({ preserveScroll, forceBottom: !preserveScroll });
   renderDrawer();
   renderSessions();
   renderComposer();
-  scrollBottom();
 }
 
 async function refreshAll() {
@@ -574,7 +576,9 @@ function renderComposer() {
 // ---------------------------------------------------------------------------
 // Chat rendering
 
-function renderChat() {
+function renderChat({ preserveScroll = true, forceBottom = false } = {}) {
+  const previousTop = els.messages.scrollTop;
+  const wasFollowing = state.followOutput;
   clear(els.messages);
   const hasPending = Boolean(state.pending);
   const turns = state.current ? state.current.turns || [] : [];
@@ -591,6 +595,13 @@ function renderChat() {
   }
   if (state.pending) {
     els.messages.appendChild(renderTurn(state.pending, true));
+  }
+  if (forceBottom) {
+    scrollBottom(true);
+  } else if (preserveScroll && wasFollowing) {
+    scrollBottom(true);
+  } else if (preserveScroll) {
+    els.messages.scrollTop = previousTop;
   }
 }
 
@@ -622,8 +633,9 @@ function renderTurn(turn, pending) {
   const images = Array.isArray(turn.images) ? turn.images : [];
   if (images.length) bubble.appendChild(renderUserImages(images, pending));
   const userText = turn.user || "";
-  if (userText && userText !== "（图片）") bubble.appendChild(el("div", "user-text", userText));
-  if (!images.length) bubble.appendChild(el("div", "user-text", userText));
+  if (shouldShowUserText(userText, images.length)) {
+    bubble.appendChild(el("div", "user-text", userText));
+  }
   user.appendChild(bubble);
   wrapper.appendChild(user);
 
@@ -893,7 +905,7 @@ async function sendMessage(textOverride) {
   renderComposer();
   renderHeader();
   scheduleRender();
-  scrollBottom();
+  scrollBottom(true);
 
   let streamError = null;
   let uploaded = [];
@@ -1013,7 +1025,7 @@ async function sendMessage(textOverride) {
   }
   try {
     if (state.current && state.current.id === sessionId) {
-      await loadSession(sessionId);
+      await loadSession(sessionId, { preserveScroll: true });
     }
     await loadSessions();
     await loadProfile();
@@ -1024,8 +1036,7 @@ async function sendMessage(textOverride) {
   renderComposer();
   renderHeader();
   renderSessions();
-  renderChat();
-  scrollBottom();
+  renderChat({ preserveScroll: true });
   if (!failed) els.composer.focus();
 }
 
@@ -1406,6 +1417,13 @@ function bindEvents() {
   $("#theme-toggle").addEventListener("click", () => applyTheme(state.theme === "dark" ? "light" : "dark"));
 
   $("#send-btn").addEventListener("click", () => sendMessage());
+  els.messages.addEventListener("scroll", () => {
+    state.followOutput = isNearBottom({
+      scrollTop: els.messages.scrollTop,
+      scrollHeight: els.messages.scrollHeight,
+      clientHeight: els.messages.clientHeight,
+    });
+  }, { passive: true });
   els.attachBtn.addEventListener("click", () => els.imageInput.click());
   els.imageInput.addEventListener("change", (event) => {
     addImageFiles(event.target.files);

@@ -272,4 +272,4 @@ system 分层：
 | 数学公式 | `math.js` 零依赖 LaTeX 子集 + 透明 math surface |
 | 图片输入 | `deepseek-flash` 视觉；本地 uploads + image_ref hydration |
 | 外链安全 | 第三方 URL 点击确认弹窗；http(s) allowlist；默认取消 |
-| 测试 | unittest 66 项 + Node Markdown/math 12 项 + live smoke/eval/security 脚本 |
+| 测试 | unittest 66 项 + Node Markdown/math/UI-state 14 项 + live smoke/eval/security 脚本 |
