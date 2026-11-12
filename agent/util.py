@@ -1,4 +1,3 @@
-"""Shared helpers: ids, time, atomic JSON, redaction, truncation."""
 from __future__ import annotations
 
 import json

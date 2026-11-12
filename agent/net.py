@@ -1,9 +1,3 @@
-"""Tiny HTTP layer with a Windows-friendly CA fallback.
-
-Python on Windows often has no CA bundle of its own.  We load the OS root
-store explicitly (and optional custom bundle) so real DeepSeek/Open-Meteo
-requests can verify certificates without `certifi`.
-"""
 from __future__ import annotations
 
 import json

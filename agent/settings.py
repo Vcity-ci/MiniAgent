@@ -1,8 +1,3 @@
-"""In-memory, process-lifetime settings.
-
-The settings panel intentionally does not persist the API key.  `.env` can
-provide initial defaults, but changes made in the browser die with the process.
-"""
 from __future__ import annotations
 
 import copy

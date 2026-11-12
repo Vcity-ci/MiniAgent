@@ -1,9 +1,3 @@
-"""DeepSeek/OpenAI-compatible streaming chat client with native tool calls.
-
-No SDK, no agent framework.  The client keeps the exact assistant messages
-needed for native tool-call replay, including `reasoning_content` when thinking
-mode is enabled (DeepSeek requires it for tool-call continuations).
-"""
 from __future__ import annotations
 
 import json

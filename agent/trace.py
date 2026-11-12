@@ -1,4 +1,3 @@
-"""JSONL trace logging and a tiny reader for the debug endpoint."""
 from __future__ import annotations
 
 import json
